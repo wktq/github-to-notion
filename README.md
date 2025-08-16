@@ -1,131 +1,329 @@
-# 🐈 GitHub to Notion
+# GitHub to Notion Migration Tool
 
-> Migrate GitHub project data to a Notion database.
+GitHubプロジェクト（新しいProjects V2）をNotionデータベースに移行するツールです。
 
-## Overview
+[English](#english) | [日本語](#japanese)
 
-Take all the cards from a GitHub project, whether they're notes or
-issues, and import their content in a Notion database.
+<a name="japanese"></a>
+## 日本語
 
-You can configure what Notion property the GitHub column name will go
-in, as well as a Notion select or multiselect to put the GitHub issue
-labels.
+### 概要
 
-## Requirements
+このツールは、GitHub Projects V2のデータをNotionデータベースに移行します。以下の機能をサポートしています：
 
-[Node.js](https://nodejs.org/) version 18 or later.
+- 組織プロジェクトとリポジトリプロジェクトの両方に対応
+- カスタムフィールド（Status、Priority、Size等）の移行
+- イシュー、プルリクエスト、ドラフトイシューの移行
+- コメントの保持
+- ラベルの移行
+- 作成日時・更新日時の保持
+- リトライ機能とエラーハンドリング
 
-## Installation
+### 必要なもの
 
-```sh
-git clone https://github.com/valeriangalliat/github-to-notion
-cd github-to-notion
+- Node.js (v18以上推奨)
+- GitHubのPersonal Access Token
+- NotionのIntegration Token
+- 移行先のNotionデータベース
+
+### セットアップ
+
+#### 1. 依存関係のインストール
+
+```bash
 npm install
 ```
 
-## Process
+#### 2. GitHub Personal Access Tokenの取得
 
-### 1. Create a GitHub token
+1. GitHubの Settings > Developer settings > Personal access tokens へアクセス
+2. "Generate new token" をクリック
+3. 以下のスコープを選択:
+   - `read:project` - プロジェクトの読み取り
+   - `repo` - リポジトリへのアクセス（プライベートリポジトリの場合）
+4. トークンを生成し、安全に保存
 
-Go to your [GitHub developer settings](https://github.com/settings/tokens)
-to create a personal access token.
+#### 3. Notion Integration Tokenの取得
 
-Export this token as `GITHUB_TOKEN` in the terminal you're going to run
-the script in:
+1. https://www.notion.so/my-integrations へアクセス
+2. "New integration" をクリックして新しいインテグレーションを作成
+3. Integration tokenをコピー
+4. Notionの移行先データベースページで、右上の「...」メニューから「Add connections」でインテグレーションを追加
 
-```console
-$ read GITHUB_TOKEN
-Paste the token here
-$ export GITHUB_TOKEN
+#### 4. 環境変数の設定
+
+```bash
+export GITHUB_TOKEN=your_github_personal_access_token
+export NOTION_TOKEN=your_notion_integration_token
 ```
 
-### 2. Dump the project as JSON
+### 使い方
 
-Use the `dump-github-project.js` script to dump the project of your
-choice as JSON. It will fetch all the columns and all the cards in each
-column, and the associated issues.
+#### 方法1: 簡単な移行スクリプトを使用
 
-```sh
-node dump-github-project.js <project-url> > project.json
+```bash
+./migrate-to-notion.sh <github-project-url> <notion-database-id> <status-field> <label-field> [imported-field]
 ```
 
-Where `<project-url>` is your GitHub project URL, which typically looks
-like this:
-
-```
-https://github.com/owner/repo/projects/42
+例：
+```bash
+./migrate-to-notion.sh https://github.com/orgs/myorg/projects/1 abc123def456 Status Labels Imported
 ```
 
-This file will be used in the next step to import into Notion.
+#### 方法2: 手動での実行
 
-### 3. Create a Notion integration
+##### 1. Notionデータベースの確認
 
-Notion doesn't have a concept of personal access tokens so we need to
-create an integration for this to work. We'll follow the steps from
-their [API getting started documentation](https://developers.notion.com/docs/getting-started).
+利用可能なNotionデータベースを一覧表示：
 
-Go to the [my integrations](https://www.notion.so/my-integrations) page
-and create a new integration.
-
-Export the token they give you as `NOTION_TOKEN` in the terminal you're
-running the script.
-
-```console
-$ read NOTION_TOKEN
-Paste the token here
-$ export NOTION_TOKEN
-```
-
-### 4. Share a database with your integration
-
-In order for your integration to access the database you want to import
-the project to, you need to share that database with your integration.
-
-Use the "share" button on the top right of your Notion database page to
-add your integration.
-
-![Share](share.png)
-
-![Invite](invite.png)
-
-### 5. Find the database ID
-
-Typically it'll be the ID in the path of the URL of the database when
-viewing it on the Notion website, e.g. if the URL is:
-
-```
-https://www.notion.so/513bff94c55a4cf09a66a336c87e7964?v=0eb7b11463c94c3a84786bd3191e4032
-```
-
-The ID we care about is:
-
-```
-513bff94c55a4cf09a66a336c87e7964
-```
-
-For convenience I added a script that lists the databases shared with
-your integration:
-
-```sh
+```bash
 node list-notion-databases.js
 ```
 
-Example output:
+特定のデータベースの構造を確認：
 
-```
-Hello: 3754a4b06b3b42089b16f01d00d969db
-```
-
-### 6. Import the project to Notion
-
-```sh
-node import-to-notion.js project.json <database-id> 'Status' 'Label'
+```bash
+node retrieve-notion-database.js <database-id>
 ```
 
-Where `<database-id>` is the ID of the database you identified in the
-previous step.
+##### 2. Notionデータベースのプロパティを自動作成
 
-In this example, `Status` is the field that will receive the GitHub
-column name, and `Label` is the field that will receive all the GitHub
-issue tags if it's a multiselect, or the first tag if it's just a
-select. Feel free to tweak accordingly.
+GitHubプロジェクトの標準的なフィールドに対応するプロパティを作成：
+
+```bash
+node create-notion-properties.js <database-id>
+```
+
+作成されるプロパティ：
+- Status (セレクト)
+- Priority (セレクト)
+- Size (セレクト)
+- Assignees (ユーザー)
+- リリース期日 (日付)
+- デザイン期日 (日付)
+- Labels (マルチセレクト)
+- GitHub URL (URL)
+- GitHub作成日 (日付)
+- GitHub更新日 (日付)
+
+##### 3. GitHubプロジェクトのエクスポート
+
+```bash
+node dump-github-project.js <github-project-url> > project.json
+```
+
+対応URL形式：
+- 組織のプロジェクト: `https://github.com/orgs/{org-name}/projects/{number}`
+- リポジトリのプロジェクト: `https://github.com/{owner}/{repo}/projects/{number}`
+
+##### 4. Notionへのインポート
+
+```bash
+node import-to-notion-v2.js project.json <database-id> [--clear]
+```
+
+オプション：
+- `--clear`: 既存のページをアーカイブしてからインポート
+
+##### 5. 途中から再開する場合
+
+```bash
+node import-to-notion-resume.js project.json <database-id> <start-index>
+```
+
+### Notionデータベースの準備
+
+移行先のNotionデータベースには以下のプロパティが必要です（`create-notion-properties.js`で自動作成可能）：
+
+1. **タイトル** - 自動的に検出されます
+2. **Status** (セレクト) - GitHubプロジェクトのステータス
+3. **Priority** (セレクト) - 優先度
+4. **Size** (セレクト) - タスクサイズ
+5. **Assignees** (ユーザー) - 担当者
+6. **リリース期日** (日付) - リリース予定日
+7. **デザイン期日** (日付) - デザイン期限
+8. **Labels** (マルチセレクト) - GitHubのラベル
+9. **GitHub URL** (URL) - 元のGitHubイシューへのリンク
+10. **GitHub作成日** (日付) - GitHubでの作成日時
+11. **GitHub更新日** (日付) - GitHubでの最終更新日時
+
+### トラブルシューティング
+
+#### "Project not found" エラー
+- GitHubトークンが正しく設定されているか確認
+- プロジェクトへのアクセス権限があるか確認
+- URLが正しい形式か確認
+
+#### Notion APIエラー
+- Notionトークンが正しく設定されているか確認
+- データベースにインテグレーションが追加されているか確認
+- フィールド名が正確に一致しているか確認（大文字小文字も含む）
+
+#### マークダウン変換エラー
+- 一部の複雑なマークダウン構造はNotionブロックに変換できない場合があります
+- 失敗したアイテムは`failed-items.json`に記録されます
+
+### 注意事項
+
+- 大量のアイテムをインポートする場合、Notion APIのレート制限により時間がかかることがあります
+- インポートは追加のみで、既存のページは更新されません
+- 再実行する場合は、`--clear`オプションを使用するか、Notion側で既存のページを削除してください
+- システムフィールド（created_time、last_edited_time）は直接設定できないため、カスタムの日付フィールドを使用します
+
+<a name="english"></a>
+## English
+
+### Overview
+
+This tool migrates GitHub Projects V2 data to Notion databases. It supports:
+
+- Both organization and repository projects
+- Custom fields (Status, Priority, Size, etc.)
+- Issues, Pull Requests, and Draft Issues
+- Comment preservation
+- Label migration
+- Creation/update timestamp preservation
+- Retry functionality and error handling
+
+### Requirements
+
+- Node.js (v18+ recommended)
+- GitHub Personal Access Token
+- Notion Integration Token
+- Target Notion database
+
+### Setup
+
+#### 1. Install Dependencies
+
+```bash
+npm install
+```
+
+#### 2. Get GitHub Personal Access Token
+
+1. Go to GitHub Settings > Developer settings > Personal access tokens
+2. Click "Generate new token"
+3. Select the following scopes:
+   - `read:project` - Read project data
+   - `repo` - Repository access (for private repos)
+4. Generate and securely save the token
+
+#### 3. Get Notion Integration Token
+
+1. Visit https://www.notion.so/my-integrations
+2. Click "New integration" to create a new integration
+3. Copy the Integration token
+4. In your target Notion database page, click "..." menu > "Add connections" and add your integration
+
+#### 4. Set Environment Variables
+
+```bash
+export GITHUB_TOKEN=your_github_personal_access_token
+export NOTION_TOKEN=your_notion_integration_token
+```
+
+### Usage
+
+#### Method 1: Using the Migration Script
+
+```bash
+./migrate-to-notion.sh <github-project-url> <notion-database-id> <status-field> <label-field> [imported-field]
+```
+
+Example:
+```bash
+./migrate-to-notion.sh https://github.com/orgs/myorg/projects/1 abc123def456 Status Labels Imported
+```
+
+#### Method 2: Manual Execution
+
+##### 1. Check Notion Databases
+
+List available Notion databases:
+
+```bash
+node list-notion-databases.js
+```
+
+Check database structure:
+
+```bash
+node retrieve-notion-database.js <database-id>
+```
+
+##### 2. Create Notion Database Properties
+
+Automatically create properties for standard GitHub project fields:
+
+```bash
+node create-notion-properties.js <database-id>
+```
+
+Creates the following properties:
+- Status (select)
+- Priority (select)
+- Size (select)
+- Assignees (people)
+- Release Date (date)
+- Design Date (date)
+- Labels (multi-select)
+- GitHub URL (url)
+- GitHub Created (date)
+- GitHub Updated (date)
+
+##### 3. Export GitHub Project
+
+```bash
+node dump-github-project.js <github-project-url> > project.json
+```
+
+Supported URL formats:
+- Organization projects: `https://github.com/orgs/{org-name}/projects/{number}`
+- Repository projects: `https://github.com/{owner}/{repo}/projects/{number}`
+
+##### 4. Import to Notion
+
+```bash
+node import-to-notion-v2.js project.json <database-id> [--clear]
+```
+
+Options:
+- `--clear`: Archive existing pages before import
+
+##### 5. Resume from Interruption
+
+```bash
+node import-to-notion-resume.js project.json <database-id> <start-index>
+```
+
+### Troubleshooting
+
+#### "Project not found" Error
+- Verify GitHub token is correctly set
+- Check project access permissions
+- Confirm URL format is correct
+
+#### Notion API Errors
+- Verify Notion token is correctly set
+- Ensure integration is added to the database
+- Check field names match exactly (including case)
+
+#### Markdown Conversion Errors
+- Some complex markdown structures may fail to convert to Notion blocks
+- Failed items are recorded in `failed-items.json`
+
+### Notes
+
+- Large imports may take time due to Notion API rate limits
+- Import only adds new pages, doesn't update existing ones
+- To re-run, use `--clear` option or manually delete existing pages in Notion
+- System fields (created_time, last_edited_time) cannot be set directly, so custom date fields are used
+
+## License
+
+MIT
+
+## Original Project
+
+This is a fork of [valeriangalliat/github-to-notion](https://github.com/valeriangalliat/github-to-notion), updated to support GitHub Projects V2 GraphQL API.

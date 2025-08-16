@@ -4,8 +4,8 @@ import fs from 'node:fs/promises'
 import { Client } from '@notionhq/client'
 import { markdownToBlocks } from '@tryfabric/martian'
 
-if (process.argv.length < 6) {
-  console.error('Usage: node import-to-notion.js <project-file> <database-id> <column-field> <label-field> [<imported-field>]')
+if (process.argv.length < 4) {
+  console.error('Usage: node import-to-notion.js <project-file> <database-id> [<status-field>] [<label-field>] [<imported-field>]')
   process.exit(1)
 }
 
@@ -18,7 +18,7 @@ if (!token) {
 
 const projectFile = process.argv[2]
 const id = process.argv[3]
-const columnField = process.argv[4]
+const statusField = process.argv[4]
 const labelField = process.argv[5]
 const importedField = process.argv[6]
 const project = JSON.parse(await fs.readFile(projectFile))
@@ -44,64 +44,156 @@ function selectOrMultiselect (name, values) {
   }
 }
 
-function getMarkdown (issue) {
-  let markdown = issue.html_url + '\n\n' + issue.body
-
-  for (const comment of issue.comments) {
-    markdown += '\n\n---\n\n'
-    markdown += comment.body
+function getMarkdown (content) {
+  if (!content) return ''
+  
+  let markdown = ''
+  
+  // Add URL if available
+  if (content.url) {
+    markdown = content.url + '\n\n'
+  }
+  
+  // Add body content
+  if (content.body) {
+    markdown += content.body
+  }
+  
+  // Add comments
+  if (content.comments && content.comments.nodes) {
+    for (const comment of content.comments.nodes) {
+      markdown += '\n\n---\n\n'
+      if (comment.author && comment.author.login) {
+        markdown += `**@${comment.author.login}** commented:\n\n`
+      }
+      markdown += comment.body || ''
+    }
   }
 
   return markdown
 }
 
-async function createPage (column, card) {
-  const name = card.note || card.issue.title
+function getStatusFromFieldValues(fieldValues) {
+  if (!fieldValues || !fieldValues.nodes) return null
+  
+  for (const fieldValue of fieldValues.nodes) {
+    if (fieldValue.field && fieldValue.field.name === 'Status' && fieldValue.name) {
+      return fieldValue.name
+    }
+  }
+  
+  return null
+}
 
+async function createPage (item) {
+  // Get title from content or use a default
+  let title = 'Untitled'
+  if (item.content) {
+    title = item.content.title || `${item.content.__typename} #${item.content.number}` || 'Untitled'
+  }
+  
   const payload = {
     parent: {
       database_id: id
     },
-    created_time: card.created_at,
-    last_edited_time: card.updated_at,
-    properties: {
-      Name: {
-        title: [
-          {
-            text: {
-              content: name
-            }
+    properties: {}
+  }
+  
+  // Find the title property (it might be named differently)
+  const titleProperty = Object.entries(schema.properties).find(([_, prop]) => prop.type === 'title')
+  if (titleProperty) {
+    payload.properties[titleProperty[0]] = {
+      title: [
+        {
+          text: {
+            content: title
           }
-        ]
-      },
-      [columnField]: selectOrMultiselect(columnField, [column.name])
+        }
+      ]
     }
   }
-
-  if (importedField) {
+  
+  // Add created/updated times if available
+  if (item.createdAt) {
+    payload.created_time = item.createdAt
+  }
+  if (item.updatedAt) {
+    payload.last_edited_time = item.updatedAt
+  }
+  
+  // Add status field
+  const status = getStatusFromFieldValues(item.fieldValues)
+  if (status && statusField && schema.properties[statusField]) {
+    try {
+      payload.properties[statusField] = selectOrMultiselect(statusField, [status])
+    } catch (e) {
+      console.warn(`Could not set status field: ${e.message}`)
+    }
+  }
+  
+  // Add imported field if specified
+  if (importedField && schema.properties[importedField]) {
     payload.properties[importedField] = {
       checkbox: true
     }
   }
-
-  if (card.issue) {
-    const markdown = getMarkdown(card.issue)
-    const blocks = markdownToBlocks(markdown)
-
-    if (card.issue.labels.length > 0) {
-      payload.properties[labelField] = selectOrMultiselect(labelField, card.issue.labels.map(label => label.name))
+  
+  // Process content-specific fields
+  if (item.content) {
+    // Add labels if available
+    if (item.content.labels && item.content.labels.nodes && item.content.labels.nodes.length > 0 && labelField && schema.properties[labelField]) {
+      try {
+        payload.properties[labelField] = selectOrMultiselect(labelField, item.content.labels.nodes.map(label => label.name))
+      } catch (e) {
+        console.warn(`Could not set label field: ${e.message}`)
+      }
     }
-
-    payload.children = blocks
+    
+    // Convert content to blocks
+    const markdown = getMarkdown(item.content)
+    if (markdown) {
+      try {
+        const blocks = markdownToBlocks(markdown)
+        payload.children = blocks
+      } catch (e) {
+        console.warn(`Could not convert markdown to blocks: ${e.message}`)
+        // Fallback to simple paragraph block
+        payload.children = [{
+          object: 'block',
+          type: 'paragraph',
+          paragraph: {
+            rich_text: [{
+              type: 'text',
+              text: { content: markdown.substring(0, 2000) }
+            }]
+          }
+        }]
+      }
+    }
   }
 
-  await notion.pages.create(payload)
-
-  console.log(`Created page ${name}`)
-}
-
-for (const column of project.columns) {
-  for (const card of column.cards) {
-    await createPage(column, card)
+  try {
+    await notion.pages.create(payload)
+    console.log(`Created page: ${title}`)
+  } catch (error) {
+    console.error(`Failed to create page "${title}": ${error.message}`)
   }
 }
+
+// Process all items
+console.log(`Processing ${project.items.nodes.length} items...`)
+
+for (const item of project.items.nodes) {
+  // Skip archived items
+  if (item.isArchived) {
+    console.log('Skipping archived item')
+    continue
+  }
+  
+  await createPage(item)
+  
+  // Add a small delay to avoid rate limiting
+  await new Promise(resolve => setTimeout(resolve, 100))
+}
+
+console.log('Import completed!')
